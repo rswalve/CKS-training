@@ -1,26 +1,64 @@
 #!/usr/bin/env bash
+# Q1 grade: kubelet anonymous + authorization.mode, etcd client-cert-auth
 set -uo pipefail
-. "$(dirname "$0")/../lib.sh"
+
+PASS=0
+FAIL=0
+SKIP=0
+
+ok()   { echo "PASS  $*"; PASS=$((PASS+1)); }
+bad()  { echo "FAIL  $*"; FAIL=$((FAIL+1)); }
+skip() { echo "SKIP  $*"; SKIP=$((SKIP+1)); }
+summary() {
+  local total=$((PASS+FAIL))
+  echo "SCORE  ${PASS} / ${total}"
+  if [[ $FAIL -eq 0 && $total -gt 0 ]]; then
+    echo "RESULT PASS"
+    return 0
+  fi
+  echo "RESULT FAIL"
+  return 1
+}
+
 echo "==> Q1 grade"
+
 cfg=/var/lib/kubelet/config.yaml
 if [[ -f $cfg ]]; then
-  if grep -qE 'enabled:\s*false' "$cfg" && grep -A2 'anonymous' "$cfg" | grep -q false; then
-    ok "kubelet anonymous-auth disabled (config.yaml)"
-  elif grep -q 'anonymous-auth=false' /etc/systemd/system/kubelet.service.d/* 2>/dev/null || grep -q 'anonymous-auth=false' /var/lib/kubelet/kubeadm-flags.env 2>/dev/null; then
+  if python3 - "$cfg" <<'PY'
+import sys, re
+t = open(sys.argv[1]).read()
+m = re.search(r"anonymous:\s*\n(?:[ \t]+.*\n)*?[ \t]+enabled:\s*(true|false)", t)
+sys.exit(0 if m and m.group(1) == "false" else 1)
+PY
+  then
+    ok "kubelet anonymous.enabled=false"
+  elif grep -qE -- 'anonymous-auth=false' /etc/systemd/system/kubelet.service.d/* /var/lib/kubelet/kubeadm-flags.env 2>/dev/null; then
     ok "kubelet anonymous-auth=false in flags"
   else
     bad "kubelet anonymous-auth is not clearly false"
   fi
-  if grep -qi 'AlwaysAllow' "$cfg" /var/lib/kubelet/kubeadm-flags.env 2>/dev/null; then
-    bad "kubelet authorization-mode still AlwaysAllow"
+
+  if python3 - "$cfg" <<'PY'
+import sys, re
+t = open(sys.argv[1]).read()
+m = re.search(r"authorization:\s*\n(?:[ \t]+.*\n)*?[ \t]+mode:\s*(\S+)", t)
+mode = (m.group(1).strip().strip("\"'") if m else "")
+sys.exit(0 if mode.lower() == "webhook" else 1)
+PY
+  then
+    ok "kubelet authorization.mode=Webhook"
+  elif grep -qE -- 'authorization-mode=Webhook' /etc/systemd/system/kubelet.service.d/* /var/lib/kubelet/kubeadm-flags.env 2>/dev/null; then
+    ok "kubelet authorization-mode=Webhook in flags"
   else
-    ok "kubelet authorization-mode is not AlwaysAllow"
+    bad "kubelet authorization.mode is not Webhook"
   fi
 else
   skip "kubelet config not on this node"
 fi
-if [[ -f /etc/kubernetes/manifests/etcd.yaml ]]; then
-  if grep -q 'client-cert-auth=true' /etc/kubernetes/manifests/etcd.yaml; then
+
+etcd=/etc/kubernetes/manifests/etcd.yaml
+if [[ -f $etcd ]]; then
+  if grep -qE -- '--client-cert-auth[= ]true' "$etcd"; then
     ok "etcd --client-cert-auth=true"
   else
     bad "etcd missing --client-cert-auth=true"
@@ -28,4 +66,5 @@ if [[ -f /etc/kubernetes/manifests/etcd.yaml ]]; then
 else
   skip "etcd manifest not on this node"
 fi
+
 summary

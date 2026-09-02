@@ -17,6 +17,12 @@ cd qXX-*
 ./grade.sh
 ```
 
+```
+git clone https://github.com/rswalve/LF-training.git
+cd LF-training
+chmod +x run-all-setup.sh run-all-grade.sh q*/*.sh
+./run-all-setup.sh q04
+```
 Or from the repo root:
 
 ```bash
